@@ -44,7 +44,7 @@
  */
 FilterOpenVDBPlugin::FilterOpenVDBPlugin() 
 { 
-	typeList = {FP_OPENVDB_VOLUME, FP_OPENVDB_LEVELSET};
+	typeList = {FP_OPENVDB_LEVELSET};
 
 	for(ActionIDType tt : types())
 		actionList.push_back(new QAction(filterName(tt), this));
@@ -68,8 +68,6 @@ QString FilterOpenVDBPlugin::pluginName() const
 QString FilterOpenVDBPlugin::filterName(ActionIDType filterId) const
 {
 	switch(filterId) {
-	case FP_OPENVDB_VOLUME :
-		return "OpenVDB Volume Remeshing";
 	case FP_OPENVDB_LEVELSET :
 		return "OpenVDB Level Set Remeshing";
 	default :
@@ -93,8 +91,6 @@ QString FilterOpenVDBPlugin::filterName(ActionIDType filterId) const
 QString FilterOpenVDBPlugin::pythonFilterName(ActionIDType f) const
 {
 	switch(f) {
-	case FP_OPENVDB_VOLUME :
-		return "openvdb_volume_remesh";
 	case FP_OPENVDB_LEVELSET :
 		return "openvdb_levelset_remesh";
 	default :
@@ -113,8 +109,6 @@ QString FilterOpenVDBPlugin::pythonFilterName(ActionIDType f) const
  QString FilterOpenVDBPlugin::filterInfo(ActionIDType filterId) const
 {
 	switch(filterId) {
-	case FP_OPENVDB_VOLUME :
-		return "Remesh the current mesh using the function meshToVolume in the OpenVDB library. First converts the current mesh to a volumetric distance field representation, then discretizes the isosurface at a given isovalue into a triangle mesh.";
 	case FP_OPENVDB_LEVELSET :
 		return "Remesh the current mesh using the function meshToLevelSet in the OpenVDB library. First converts the current mesh to a volumetric distance field representation, then discretizes the isosurface at a given isovalue into a triangle mesh.";
 	default :
@@ -133,7 +127,6 @@ QString FilterOpenVDBPlugin::pythonFilterName(ActionIDType f) const
 FilterOpenVDBPlugin::FilterClass FilterOpenVDBPlugin::getClass(const QAction *a) const
 {
 	switch(ID(a)) {
-	case FP_OPENVDB_VOLUME :
 	case FP_OPENVDB_LEVELSET :
 		return FilterPlugin::Remeshing;
 	default :
@@ -190,9 +183,6 @@ RichParameterList FilterOpenVDBPlugin::initParameterList(const QAction *action,c
 		parlst.addParam(RichPercentage ("isovalue", 0,0.0f,m.cm.bbox.Diag(), "Isovalue", "Determines the isosurface used to recompute the mesh discretization."));
 		parlst.addParam(RichPercentage("adaptivity", 0,0.0f,m.cm.bbox.Diag(), "Adaptivity", "The adaptivity threshold determines how closely\nthe isosurface is matched by the resulting mesh.\nHigher thresholds will allow more variation in\npolygon size, using fewer polygons to express the surface."));
 		break;
-	case FP_OPENVDB_VOLUME :
-		parlst.addParam(RichPercentage("voxelSize", m.cm.bbox.Diag()/100.0f,0.0f,m.cm.bbox.Diag(), "Voxel Size", "Size of the voxels in the grid used to represent the distance field."));
-		parlst.addParam(RichPercentage ("isovalue", 0,0.0f,m.cm.bbox.Diag(), "Isovalue", "Determines the isosurface used to recompute the mesh discretization."));
 	default :
 		assert(0);
 	}
@@ -210,11 +200,9 @@ RichParameterList FilterOpenVDBPlugin::initParameterList(const QAction *action,c
 std::map<std::string, QVariant> FilterOpenVDBPlugin::applyFilter(const QAction * action, const RichParameterList & parameters, MeshDocument &md, unsigned int& /*postConditionMask*/, vcg::CallBackPos *cb)
 {
 	switch(ID(action)) {
-	case FP_OPENVDB_VOLUME :
 	case FP_OPENVDB_LEVELSET :
 		remesh(md, cb, parameters.getAbsPerc("voxelSize"), parameters.getAbsPerc("isovalue"),
-		ID(action) == FP_OPENVDB_LEVELSET ? parameters.getAbsPerc("adaptivity") : 0.0,
-		ID(action) == FP_OPENVDB_LEVELSET);
+		parameters.getAbsPerc("adaptivity"));
 		break;
 	default :
 		wrongActionCalled(action);
@@ -227,8 +215,7 @@ bool FilterOpenVDBPlugin::remesh(
 	vcg::CallBackPos *cb,
 	Scalarm voxelSize,
 	Scalarm isovalue,
-	Scalarm adaptivity,
-	bool isLevelSet)
+	Scalarm adaptivity)
 {
 	// Check that the voxel size is a number greater than 0
 	if(voxelSize <= std::numeric_limits<Scalarm>::epsilon()){
@@ -239,14 +226,13 @@ bool FilterOpenVDBPlugin::remesh(
 	CMeshO &m = md.mm()->cm;
 
 	// Check that the mesh is watertight
-    // int boundaryEdgeNum, internalEdgeNum,nonManif;
-    // vcg::tri::Clean<CMeshO>::CountEdgeNum(m,internalEdgeNum,boundaryEdgeNum,nonManif);
-    // if(boundaryEdgeNum>0){
-	// 	throw MLException("Unable to remesh non-watertight mesh.");
-	// 	return false;
-	// }
+	int boundaryEdgeNum, internalEdgeNum,nonManif;
+	if(!(vcg::tri::Clean<CMeshO>::IsWaterTight(m))){
+		throw MLException("Unable to remesh non-watertight mesh.");
+		return false;
+	}
 	
-	log(" Input mesh %8i v %8i f\n",m.VN(),m.FN());
+	log("Input mesh %8i v %8i f\n",m.VN(),m.FN());
 
 	cb(0, "Cleaning Mesh...");
 
@@ -266,22 +252,19 @@ bool FilterOpenVDBPlugin::remesh(
 	adapter.setMesh(&m);
 	log("Loaded mesh in %i ms", timer.elapsed());
 	timer.restart();
-	cb(30, "Converting Mesh to Volume...");
-	if(isLevelSet){
-		adapter.meshToLevelSet();
-	}else{
-		adapter.meshToVolume();
-	}
-	log("Converted mesh to volume in %i ms", timer.elapsed());
+	cb(30, "Converting Mesh to Level Set...");
+	adapter.meshToLevelSet();
+
+	log("Converted mesh to level set in %i ms", timer.elapsed());
 	timer.restart();
-	cb(70, "Converting Volume to Mesh...");
+	cb(70, "Converting Level Set to Mesh...");
 	CMeshO &m2 = md.addNewMesh("", "Offset mesh", true)->cm;
 	// md.setCurrentMesh(0);
 	adapter.volumeToMesh(m2);
-	log("Converted volume to mesh in %i ms", timer.elapsed());
+	log("Converted level set to mesh in %i ms", timer.elapsed());
 	cb(10, "Done.");
 
-	log("Output mesh %8i v %8i f\n",m2.VN(),m2.FN());
+	log("Output mesh %8i v %8i f",m2.VN(),m2.FN());
 
 	vcg::tri::UpdateBounding<CMeshO>::Box(m2);
 	vcg::tri::UpdateNormal<CMeshO>::PerVertexNormalizedPerFace(m2);

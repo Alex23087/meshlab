@@ -48,7 +48,7 @@ class FilterOpenVDBPlugin : public QObject, public FilterPlugin
 	Q_INTERFACES(FilterPlugin)
 
 public:
-	enum { FP_OPENVDB_VOLUME, FP_OPENVDB_LEVELSET  } ;
+	enum { FP_OPENVDB_LEVELSET  } ;
 
 	FilterOpenVDBPlugin();
 	virtual ~FilterOpenVDBPlugin();
@@ -76,8 +76,7 @@ private:
 		vcg::CallBackPos *cb,
 		Scalarm voxelSize,
 		Scalarm isovalue,
-		Scalarm adaptivity,
-		bool isLevelSet);
+		Scalarm adaptivity);
 };
 
 #endif
